@@ -19,27 +19,44 @@ else
     save(proteinECNumbers_FileName, 'ProteinECNumbers');
 end
 
+Osorio_model=readCbModel('models/Astrocyte_Osorio2019.xml');
 % Load Recon3D model
 load('models/Recon3D_301.mat')
 % Recon3D stats
 N_filled = find(~cellfun(@isempty,Recon3D.rxnECNumbers));
 percent_of_filled = length(N_filled)/length(Recon3D.rxnECNumbers) * 100;
 fprintf('%.02f%% of the reactions in Recon3D are associated with EC numbers\n', percent_of_filled)
+N_filled = find(~cellfun(@isempty,Recon3D.rules));
+percent_of_filled = length(N_filled)/length(Recon3D.rules) * 100;
+fprintf('%.02f%% of the reactions in Recon3D are associated with gene rules\n', percent_of_filled)
 % Standarize Recon3D rxnECNumber rules
 Recon3D = harmonizeReconECnumbers(Recon3D);
 Recon3D = makePrules(Recon3D);
 
 %% Map omic data to Recon3D reactions
 disp('Mapping omic data to Recon3D reactions ...')
-profile on
-abundanceTable = mapAbundance(Recon3D, abundance, ProteinECNumbers);
-expresion = EnsemblToEntrez(expresion, 'data/mart_export.txt');
-expressionTable = mapExpression(Recon3D, expresion);
-profile viewer
+
+abundanceTable_FileName = 'out/abundanceTable.mat';
+expressionTable_FileName = 'out/expressionTable.mat';
+if isfile(expressionTable_FileName) && isfile(abundanceTable_FileName)
+    load(abundanceTable_FileName, 'abundanceTable');
+    load(expressionTable_FileName, 'expressionTable');
+else
+    profile on
+    abundanceTable = mapAbundance(Recon3D, abundance, ProteinECNumbers);
+    expresion = EnsemblToEntrez(expresion, 'data/mart_export.txt');
+    expressionTable = mapExpression(Recon3D, expresion);
+    profile viewer
+
+    save(abundanceTable_FileName, 'abundanceTable');
+    save(expressionTable_FileName, 'expressionTable');
+end
+
 
 %% Transcriptomic and proteomic data integration
 disp('Integrating Transcriptomic and Proteomic data ...')
 omicIntegratedData = omicIntegrationPCA(abundanceTable, expressionTable);
+% omicIntegratedData = log(abs(min(omicIntegratedData)) + omicIntegratedData);
 
 %% Recon3D Model reduction to astrocite specific GEM
 disp('Creating Astrocite Specific Model ...')
@@ -53,43 +70,78 @@ astrociteModel.description = 'MendozaAstrociteModel';
 save('out/dirtyAstrociteModel.mat', 'astrociteModel');
 
 %% First FBA to check flux
-FBAsolution = optimizeCbModel(astrociteModel,'max');
-fprintf("The first FBA flux after reduction is %f\n", FBAsolution.f)
+ 
 
 %% Cleaning the model
-modelClosed = modelHarmonization(astrociteModel);
-[modelExchanges, selExc] = findExchangeReactions(modelClosed);
-% Set lower bound of biomass reaction to 0 
-modelClosed.lb(ismember(modelClosed.rxns,'biomass_reaction'))=0;
-modelClosed.lb(ismember(modelClosed.rxns,'biomass_maintenance_noTrTr'))=0;
-modelClosed.lb(ismember(modelClosed.rxns,'biomass_maintenance'))=0;
-% Set exchange reactions
-modelClosed.lb(ismember(modelClosed.rxns,modelClosed.rxns(modelExchanges)))=0;
-modelClosed.ub(ismember(modelClosed.rxns,modelClosed.rxns(modelExchanges)))=1000;
-% Remove leaking metabolites
 disp('Searching and removing Leaking metabolites ...')
-modelNoLeak = modelClosed;
-[LeakRxns,modelTested,LeakRxnsFluxVector] = fastLeakTest(modelNoLeak, modelNoLeak.rxns(selExc), 'false');
+LeakRxns = searchLeakMetabolites(astrociteModel);
 if ~isempty(LeakRxns)
     disp('Removing leaking metabolites');
-    modelNoLeak = removeRxns(modelNoLeak, LeakRxns);
+    modelNoLeak = removeRxns(astrociteModel, LeakRxns);
 end
 save('out/NoLeakAstrociteModel.mat', 'modelNoLeak');
 
 % FBA after removing the leaking metabolites
-modelExchanges = findExchangeReactions(modelNoLeak);
-modelNoLeak.lb(ismember(modelNoLeak.rxns,modelNoLeak.rxns(modelExchanges)))=-1000;
-modelNoLeak.ub(ismember(modelNoLeak.rxns,modelNoLeak.rxns(modelExchanges)))=1000;
 FBAsolution = optimizeCbModel(modelNoLeak,'max');
 fprintf("The FBA flux after removing the leaking metabolites is %f\n", FBAsolution.f)
 
 %% Set DMEM medium
 astrociteModelDMEM = setBoundriesDMEMedium(modelNoLeak);
 FBAsolution = optimizeCbModel(astrociteModelDMEM ,'max');
+fprintf("The FBA flux after constrain to DMEM %f\n", FBAsolution.f)
+FBAsolution = optimizeCbModel(Osorio_model ,'max');
+fprintf("The FBA flux for osorio model %f\n", FBAsolution.f)
+
 % How many exchange reactions are active
-modelexchanges1 = strmatch('Ex_',astrociteModelDMEM.rxns);
-modelexchanges4 = strmatch('EX_',astrociteModelDMEM.rxns);
-modelExchanges = unique([modelexchanges1;modelexchanges4]);
+modelExchanges = strmatch('EX_',astrociteModelDMEM.rxns);
+% modelExchanges = findExchangeReactions(astrociteModelDMEM);
 exRxns = find(ismember(astrociteModelDMEM.rxns,astrociteModelDMEM.rxns(modelExchanges)) & FBAsolution.v ~= 0);
 astrociteModelDMEM.rxns(exRxns)
 
+allExchanges = findExchangeReactions(astrociteModelDMEM, 1);
+modelExchangesLogic = false(1, length(astrociteModelDMEM.rxns));
+modelExchangesLogic(modelExchanges) = 1;
+% printRxnFormula(astrociteModelDMEM, 'rxnAbbrList', astrociteModelDMEM.rxns(allExchanges & ~modelExchangesLogic'));
+% Close other exchange reactions
+astrociteModelDMEM.lb(ismember(astrociteModelDMEM.rxns,astrociteModelDMEM.rxns(allExchanges == 1 & ~modelExchangesLogic)))=0;
+FBAsolution = optimizeCbModel(astrociteModelDMEM ,'max');
+
+only_recon3d = compareModelsRxns(Recon3D, astrociteModelDMEM);
+only_astrcyte = compareModelsRxns(astrociteModelDMEM, Recon3D);
+fprintf("reactions only recon: %d only astrocyte %d shared %d \n", ...
+    length(only_recon3d), length(only_astrcyte), length(Recon3D.rxns) - length(only_recon3d))
+
+only_osorio = compareModelsRxns(Osorio_model, astrociteModelDMEM);
+only_astrcyte = compareModelsRxns(astrociteModelDMEM, Osorio_model);
+fprintf("reactions only osorio: %d only astrocyte %d shared %d %d\n", ...
+    length(only_osorio), length(only_astrcyte), length(Osorio_model.rxns) - length(only_osorio), length(astrociteModelDMEM.rxns) - length(only_astrcyte))
+%% Contexto
+omicIntegratedData(omicIntegratedData < 0) = 0;
+
+%% Graficas
+figure;
+subplot(2,3,1);
+histogram(table2array(abundanceTable(:,:)))
+ylim([0 14000])
+title('Abundances in Rxns')
+subplot(2,3,2);
+histogram(table2array(expressionTable(:,:)))
+ylim([0 14000])
+title('Expressions in Rxns')
+subplot(2,3,3);
+histogram(omicIntegratedData)
+ylim([0 14000])
+title('Integrated data in Rxns')
+
+subplot(2,3,4);
+histogram(real(log(table2array(abundanceTable(:,:)))))
+ylim([0 8000])
+title('Log Abundances in Rxns')
+subplot(2,3,5);
+histogram(real(log(table2array(expressionTable(:,:)))))
+ylim([0 8000])
+title('Log Expressions in Rxns')
+subplot(2,3,6);
+histogram(real(log(omicIntegratedData)))
+ylim([0 8000])
+title('Log Integrated data in Rxns')

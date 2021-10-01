@@ -3,6 +3,7 @@ function model = setBoundriesDMEMedium(model)
 modelexchanges1 = strmatch('Ex_',model.rxns);
 modelexchanges4 = strmatch('EX_',model.rxns);
 modelExchanges = unique([modelexchanges1;modelexchanges4]);
+% modelExchanges = findExchangeReactions(model);
 model.lb(ismember(model.rxns,model.rxns(modelExchanges)))=0;
 model.ub(ismember(model.rxns,model.rxns(modelExchanges)))=0;
 
@@ -23,5 +24,10 @@ model = changeRxnBounds(model,'EX_nad[e]', -0.004,'l');
 model = changeRxnBounds(model,'EX_ribfiv[e]', -0.0004,'l');
 model = changeRxnBounds(model,'EX_inost[e]', -0.0072,'l');
 model = changeRxnBounds(model,'EX_glc_D[e]', -4.5,'l');
+
+model = changeRxnBounds(model,'EX_udpglcur[e]', -0.05, 'l');
+model = changeRxnBounds(model,'EX_M02047[e]', -0.05, 'l');
+model = changeRxnBounds(model,'EX_cytd[e]', -0.016, 'l');
+% model = changeRxnBounds(model,'EX_dcyt[e]', -0.005, 'l');
 
 end
