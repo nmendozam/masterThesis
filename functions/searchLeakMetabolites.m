@@ -1,7 +1,8 @@
 function LeakRxns = searchLeakMetabolites(model)
 
 modelClosed = modelHarmonization(model);
-[modelExchanges, selExc] = findExchangeReactions(modelClosed);
+[~, selExc] = findExchangeReactions(modelClosed);
+modelExchanges = findExcRxns(modelClosed);
 % Set lower bound of biomass reaction to 0 
 modelClosed.lb(ismember(modelClosed.rxns,'biomass_reaction'))=0;
 modelClosed.lb(ismember(modelClosed.rxns,'biomass_maintenance_noTrTr'))=0;
