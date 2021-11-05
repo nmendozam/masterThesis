@@ -1,6 +1,6 @@
 close all force; clear variables; clc
-
 %% Startup the COBRA Toolbox
+addpath('cobratoolbox')
 initCobraToolbox(false) % Don't update the toolbox
 changeCobraSolver ('gurobi', 'all', 1); % For large models
 clc
@@ -20,6 +20,13 @@ else
 end
 
 Osorio_model=readCbModel('models/Astrocyte_Osorio2019.xml');
+Osorio_model.rxns = strrep(Osorio_model.rxns,"(","[");
+Osorio_model.rxns = strrep(Osorio_model.rxns,")","]");
+
+Martin_model=readCbModel('models/Astrocyte_Martin-Jimenez2017.xml');
+Martin_model.rxns = strrep(Martin_model.rxns,"(","[");
+Martin_model.rxns = strrep(Martin_model.rxns,")","]");
+
 % Load Recon3D model
 load('models/Recon3D_301.mat')
 % Recon3D stats
@@ -56,28 +63,36 @@ end
 %% Transcriptomic and proteomic data integration
 disp('Integrating Transcriptomic and Proteomic data ...')
 omicIntegratedData = omicIntegrationPCA(abundanceTable, expressionTable);
-% omicIntegratedData = log(abs(min(omicIntegratedData)) + omicIntegratedData);
+omicIntegratedData = log(abs(min(omicIntegratedData)) + omicIntegratedData);
+
+%% Reinforce Exchanges from Osorio
+OsorioExchanges = Osorio_model.rxns(strmatch('EX_', Osorio_model.rxns));
+ReconExchanges_from_Osorio = ismember(Recon3D.rxns, OsorioExchanges);
+omicIntegratedData(ReconExchanges_from_Osorio) = omicIntegratedData(ReconExchanges_from_Osorio) + 500;
 
 %% Recon3D Model reduction to astrocite specific GEM
 disp('Creating Astrocite Specific Model ...')
 options.solver = 'iMAT';
-options.expressionRxns = omicIntegratedData;
-options.threshold_lb = 1000;
-options.threshold_ub = -1000;
+options.expressionRxns = omicIntegratedData();
+options.threshold_lb = 500;
+options.threshold_ub = -500;
 
 astrociteModel = createTissueSpecificModel(Recon3D, options);
 astrociteModel.description = 'MendozaAstrociteModel';
+astrociteModel.rxnECNumbers = {astrociteModel.rxnECNumbers{:}}';
 save('out/dirtyAstrociteModel.mat', 'astrociteModel');
 
 %% First FBA to check flux
- 
+FBAsolution = optimizeCbModel(astrociteModel,'max');
+fprintf("The first FBA flux after reduction is %f\n", FBAsolution.f)
 
 %% Cleaning the model
 disp('Searching and removing Leaking metabolites ...')
 LeakRxns = searchLeakMetabolites(astrociteModel);
 if ~isempty(LeakRxns)
-    disp('Removing leaking metabolites');
-    modelNoLeak = removeRxns(astrociteModel, LeakRxns);
+    disp('Seraching for a consistent network');
+    [~, ~, ~, ~, modelNoLeak] = findFluxConsistentSubset(astrociteModel);
+%     modelNoLeak = removeRxns(astrociteModel, LeakRxns);
 end
 save('out/NoLeakAstrociteModel.mat', 'modelNoLeak');
 
@@ -89,22 +104,21 @@ fprintf("The FBA flux after removing the leaking metabolites is %f\n", FBAsoluti
 astrociteModelDMEM = setBoundriesDMEMedium(modelNoLeak);
 FBAsolution = optimizeCbModel(astrociteModelDMEM ,'max');
 fprintf("The FBA flux after constrain to DMEM %f\n", FBAsolution.f)
+
+Exchanges = {'EX_gly[e]', 'EX_gln_L[e]', 'EX_ile_L[e]', 'EX_leu_L[e]', 'EX_met_L[e]', 'EX_phe_L[e]', 'EX_ser_L[e]', 'EX_thr_L[e]', 'EX_trp_L[e]', 'EX_val_L[e]', 'EX_dhf[e]', 'EX_nad[e]', 'EX_ribfiv[e]', 'EX_inost[e]', 'EX_glc_D[e]', 'EX_udpglcur[e]', 'EX_cytd[e]'};
+result = {};
+result(:,1) = FBAsolution.v(ismember(astrociteModelDMEM.rxns, Exchanges))
+result(1,:)=astrociteModelDMEM.rxns(ismember(astrociteModelDMEM.rxns, Exchanges))
+
 FBAsolution = optimizeCbModel(Osorio_model ,'max');
 fprintf("The FBA flux for osorio model %f\n", FBAsolution.f)
+Osorio_modelDMEM = setBoundriesDMEMedium(Osorio_model);
+FBAsolution = optimizeCbModel(Osorio_modelDMEM ,'max');
+fprintf("The FBA flux after constrain to DMEM %f\n", FBAsolution.f)
 
-% How many exchange reactions are active
-modelExchanges = strmatch('EX_',astrociteModelDMEM.rxns);
-% modelExchanges = findExchangeReactions(astrociteModelDMEM);
-exRxns = find(ismember(astrociteModelDMEM.rxns,astrociteModelDMEM.rxns(modelExchanges)) & FBAsolution.v ~= 0);
-astrociteModelDMEM.rxns(exRxns)
 
-allExchanges = findExchangeReactions(astrociteModelDMEM, 1);
-modelExchangesLogic = false(1, length(astrociteModelDMEM.rxns));
-modelExchangesLogic(modelExchanges) = 1;
-% printRxnFormula(astrociteModelDMEM, 'rxnAbbrList', astrociteModelDMEM.rxns(allExchanges & ~modelExchangesLogic'));
-% Close other exchange reactions
-astrociteModelDMEM.lb(ismember(astrociteModelDMEM.rxns,astrociteModelDMEM.rxns(allExchanges == 1 & ~modelExchangesLogic)))=0;
-FBAsolution = optimizeCbModel(astrociteModelDMEM ,'max');
+FBAsolution.v(strmatch('EX_', Osorio_model.rxns))
+Osorio_model.rxns(strmatch('EX_', Osorio_model.rxns))
 
 only_recon3d = compareModelsRxns(Recon3D, astrociteModelDMEM);
 only_astrcyte = compareModelsRxns(astrociteModelDMEM, Recon3D);
@@ -145,3 +159,60 @@ subplot(2,3,6);
 histogram(real(log(omicIntegratedData)))
 ylim([0 8000])
 title('Log Integrated data in Rxns')
+
+Exchange = modelNoLeak.rxns(strncmp('EX_', modelNoLeak.rxns, 3));
+Exchange(contains(Exchange, 'ac'))
+
+% printRxnFormula(modelNoLeak, 'rxnAbbrList', Exchange,'printFlag', true, 'metNameFlag', true)
+
+
+
+
+astrociteModelDMEM = setBoundriesDMEMedium(astrociteModel);
+FBAsolution = optimizeCbModel(astrociteModelDMEM ,'max');
+fprintf("The FBA flux after constrain to DMEM %f\n", FBAsolution.f)
+
+Exchange = astrociteModelDMEM.rxns(strncmp('EX_', astrociteModelDMEM.rxns, 3));
+Exchange = Exchange(~strcmp(Exchange,'EX_dcmp[e]')); % desoxicitidina monofosfato  ADN
+Exchange = Exchange(~strcmp(Exchange,'EX_cytd[e]')); % citidina
+Exchange = Exchange(~strcmp(Exchange,'EX_dcyt[e]')); % Deoxycytidine
+for i=1:length(Exchange)
+    Current = Exchange{i};
+    astrociteModelDMEM = changeRxnBounds(astrociteModelDMEM, Current, -1000, 'l');
+    
+    FBAsolution = optimizeCbModel(astrociteModelDMEM ,'max');
+    if FBAsolution.f > 0 || i == 806
+        fprintf("%s got %f\n", Current, FBAsolution.f)
+    else
+        for j=1:length(Exchange)
+            Current_ = Exchange{j};
+            astrociteModelDMEM = changeRxnBounds(astrociteModelDMEM, Current_, -1000, 'l');
+
+            FBAsolution_ = optimizeCbModel(astrociteModelDMEM ,'max');
+            if FBAsolution_.f > 0
+                fprintf("%s and %s got %f\n", Current, Current_, FBAsolution_.f)
+            end
+            astrociteModelDMEM = changeRxnBounds(astrociteModelDMEM, Current_, 0, 'l');
+        end
+    end
+    
+    astrociteModelDMEM = changeRxnBounds(astrociteModelDMEM, Current, 0, 'l');
+end
+
+% Exchange = strncmp('EX_', astrociteModelDMEM.rxns, 3);
+% astrociteModelDMEM.rxns(Exchange & FBAsolution.v < 0)
+% FBAsolution.v(Exchange & FBAsolution.v < 0)
+
+%% See esential reacions
+allModels = {};
+newModelName = 'AstrociteDMEM';
+allModels.(newModelName) = astrociteModelDMEM;
+newModelName = 'Osorio';
+allModels.(newModelName) = Osorio_model;
+[essentialRxn4Models, dataStruct] = essentialRxn4MultipleModels(allModels , 'biomass_reaction');
+
+x = table2cell(essentialRxn4Models);
+names = x(:,1);
+essentials = names([x{:,2}] < 0.05);
+essentials(strncmp('EX_', essentials, 3))
+
