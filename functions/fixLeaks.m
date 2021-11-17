@@ -21,7 +21,7 @@ function model = fixLeaks(model)
 
 % model = removeRxns(model, model.rxns(model.rxnRemoveBool));
 
-load stoich.mat
+% load stoich.mat
 % save stoich.mat
 
 % load insideFixLeaks.mat
@@ -141,7 +141,7 @@ function Tables = getCommonMetRxns(model, metabolite, Table)
     while true
         [value, xindex] = max(commonMets);
         [value, yindex] = max(value);
-        if any(sum(commonMets == value) > 1)
+        if any(sum(commonMets == value) > 1) || isempty(Table)
             break;
         end
         xindex = xindex(yindex);
@@ -205,6 +205,22 @@ function weights = get_reactions_weights(model, Table)
     end
 end
 
+
+function met_candidate = findMetCandidate(model, metabolite, compartment)
+    met_no_num = regexprep(model.metFormulas, '\d', '');
+    
+    met_candidates = model.mets(ismember(met_no_num, metabolite));
+    if isempty(met_candidates)
+        met_candidate = {};
+    else
+        met_candidate = met_candidates(contains(met_candidates, compartment));
+    end
+    % Return only one candidate
+    if length(met_candidate) > 1
+        met_candidate = met_candidate(1);
+    end
+end
+
 function model = balance(model, metabolite, Table)
     MetInd = find(strcmp(metabolite, model.mets));
     [Ematrix, elements] = getElementalComposition(model.metFormulas{MetInd}, model.Elements);
@@ -214,7 +230,7 @@ function model = balance(model, metabolite, Table)
     while any(sum(Table{:, MetElemet}))
         % Search pair of disbalanced reaction
         disRxns = zeros(length(MetElemet), height(Table));
-        difference = zeros(length(MetElemet),1);
+        difference = zeros(1, length(MetElemet));
         for m=1:length(MetElemet)
             difference(m) = sum(Table{:, MetElemet(m)});
             pairs = nchoosek(Table{:, MetElemet(m)}, 2);
@@ -231,32 +247,46 @@ function model = balance(model, metabolite, Table)
             break;
         end
         
+        met_compartment = regexp(metabolite, '\[.*\]', 'match');
+        met_compartment = met_compartment{1}{1};
+        balance = -difference./(2 * Ematrix);
+        
         % Once we have found the disblanced reactions
         % Fix the stoichiometry finding a midle point between those
         for m=1:length(MetElemet)
             % Find the metabolite candidate
-            met_compartment = regexp(metabolite, '\[.*\]', 'match');
-            met_no_num = regexprep(model.metFormulas, '\d', '');
-            met_candidates = model.mets(ismember(met_no_num, MetElemet(m)));
-            met_candidate = met_candidates{contains(met_candidates, met_compartment{1}{1})};
-            met_candidateInd = findMetIDs(model, met_candidate);
-            [candidate_Ematrix, ~] = getElementalComposition(model.metFormulas{met_candidateInd}, model.Elements);
-            candidate_Ematrix = candidate_Ematrix(candidate_Ematrix > 0);
+            met_candidate = findMetCandidate(model, MetElemet(m), met_compartment);
+            if isempty(met_candidate)
+                met_candidate = metabolite;
+            end
 
-            stoich_change = zeros(height(Table), 1);
-            balance = -difference(m)/(2 * candidate_Ematrix);
-            % Balance values for each side of the reaction
-            MetColum = Table.(MetElemet{m});
-            stoich_change(MetColum > 0) = balance * MetColum(MetColum > 0) / sum(MetColum(MetColum > 0));
-            stoich_change(MetColum < 0) = balance * MetColum(MetColum < 0) / sum(MetColum(MetColum < 0));
+            met_candidateInd = findMetIDs(model, met_candidate);
+
+            stoich_change = zeros(height(Table), 1) + balance(m);
             stoich_change = model.S(met_candidateInd, Table.RxnInd) + stoich_change';
-            
 
             % Change the stoichiometry in the model
-            [model, ModifiedRxns] = changeRxnMets(model, {met_candidate}, {met_candidate}, Table.Rxns, stoich_change);
+            [model, ~] = changeRxnMets(model, met_candidate, met_candidate, Table.Rxns, stoich_change);
             for i=1:height(Table)
-                fprintf('Changing %s with %d %s\n', Table.Rxns{i}, stoich_change(i), met_candidate)
+                fprintf('Changing %s with %d %s\n', Table.Rxns{i}, stoich_change(i), met_candidate{1})
             end
+            
+            if isempty(findMetCandidate(model, MetElemet(m), met_compartment))
+                [candidate_Ematrix, candidate_elements] = getElementalComposition(model.metFormulas{MetInd}, model.Elements);
+                candidate_elements = candidate_elements(candidate_Ematrix > 0);
+                candidate_Ematrix = candidate_Ematrix(candidate_Ematrix > 0);
+                
+                otherEmatrix = candidate_Ematrix(1:length(candidate_elements) ~= m);
+                otherElements = candidate_elements(1:length(candidate_elements) ~= m);
+                otherMet = findMetCandidate(model, otherElements, met_compartment);
+                
+                met_candidateInd = findMetIDs(model, otherMet);
+                stoich_change = (zeros(height(Table), 1) + (balance(m)));
+                stoich_change = (model.S(met_candidateInd, Table.RxnInd)) - stoich_change';
+                [model, ~] = changeRxnMets(model, otherMet, otherMet, Table.Rxns, stoich_change);
+                break;
+            end
+            
         end
 
         % Update table
@@ -303,12 +333,21 @@ while true
     % Table = Table(sum(Table(5:end)),:)
     if height(Table) > 1
         Tables = getCommonMetRxns(model, metabolite, Table);
+        if isempty(Tables)
+            leakInd = find(minSiphonMetBool(MetInd,:));
+            RxnInd = find(minSiphonRxnBool(:, leakInd));
+            Table = getStoichTable(model, RxnInd)
+            Tables = getCommonMetRxns(model, metabolite, Table);
+        end
+        
         for i=1:length(Tables)
             model = balance(model, metabolite, Tables{i});
             % model = balance(model, {'h[c]'}, Tables{i});
+            % model = balance(model, {'co2[c]'}, Tables{i});
         end
+        
     else
-        model = balance(model, metabolite, Table);
+        break;
     end
     % RxnBool = false(size(model.rxns));
     % RxnBool(Table.RxnInd) = true;
