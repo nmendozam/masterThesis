@@ -32,6 +32,8 @@ model = removeRxns(model, 'steroids');
 [model, ModifiedRxns] = changeRxnMets(model, {'alpa_hs[c]'}, {'alpa_hs[c]', 'o2[c]', 'co2[c]', 'h[c]', 'pi[c]'}, 'AGPAT2', [-3, -8, 23, 35, 2]');
 [model, ModifiedRxns] = changeRxnMets(model, {'h[c]', 'h2o[c]'}, {'h[c]', 'h2o[c]'}, 'HMR_1186', [-2, 1]');
 [model, ModifiedRxns] = changeRxnMets(model, {'h[m]'}, {'h[m]'}, 'HMR_9818', [4517]');
+[model, ModifiedRxns] = changeRxnMets(model, {'h[c]'}, {'h[c]'}, {'HMR_5130' 'HMR_5131' 'HMR_5132' 'HMR_5133' 'HMR_5134' 'HMR_5135' 'HMR_5136' 'HMR_5137' 'HMR_5138' 'HMR_5139' 'HMR_5140' 'HMR_5141' 'HMR_5142' 'HMR_5143' 'HMR_5145' 'HMR_5146' 'HMR_5147' 'HMR_5148' 'HMR_5149' 'HMR_5150'}, zeros(1,20)+1);
+[model, ModifiedRxns] = changeRxnMets(model, {'h2o[c]'}, {'h2o[c]'}, {'HMR_5130' 'HMR_5131' 'HMR_5132' 'HMR_5133' 'HMR_5134' 'HMR_5135' 'HMR_5136' 'HMR_5137' 'HMR_5138' 'HMR_5139' 'HMR_5140' 'HMR_5141' 'HMR_5142' 'HMR_5143' 'HMR_5145' 'HMR_5146' 'HMR_5147' 'HMR_5148' 'HMR_5149' 'HMR_5150'}, zeros(1,20)-1);
 % [model, ModifiedRxns] = changeRxnMets(model, {'o2[c]'}, {'o2[c]'}, 'HMR_5168', [2336/4]');
 % [model, ModifiedRxns] = changeRxnMets(model, {'o2[c]'}, {'o2[c]'}, 'HMR_9818', [2336/4]');
 
@@ -114,15 +116,15 @@ function Tables = getCommonMetRxns(model, metabolite, Table)
     Table.Mets = cellfun(@(x) x(~ismember(x, metabolite)), Table.Mets, 'UniformOutput', false);
     Table.Stoichiometries = cellfun(@(met, stoich) ...
         stoich(~ismember(met, metabolite)), Table.Mets, Table.Stoichiometries, 'UniformOutput', false);
-    Table.Mets = cellfun(@(x) x(~ismember(x, {'h2o'})), Table.Mets, 'UniformOutput', false);
-    Table.Stoichiometries = cellfun(@(met, stoich) ...
-        stoich(~ismember(met, {'h2o'})), Table.Mets, Table.Stoichiometries, 'UniformOutput', false);
-    Table.Mets = cellfun(@(x) x(~ismember(x, {'o2'})), Table.Mets, 'UniformOutput', false);
-    Table.Stoichiometries = cellfun(@(met, stoich) ...
-        stoich(~ismember(met, {'o2'})), Table.Mets, Table.Stoichiometries, 'UniformOutput', false);
-    Table.Mets = cellfun(@(x) x(~ismember(x, {'h'})), Table.Mets, 'UniformOutput', false);
-    Table.Stoichiometries = cellfun(@(met, stoich) ...
-        stoich(~ismember(met, {'h'})), Table.Mets, Table.Stoichiometries, 'UniformOutput', false);
+%     Table.Mets = cellfun(@(x) x(~ismember(x, {'h2o'})), Table.Mets, 'UniformOutput', false);
+%     Table.Stoichiometries = cellfun(@(met, stoich) ...
+%         stoich(~ismember(met, {'h2o'})), Table.Mets, Table.Stoichiometries, 'UniformOutput', false);
+%     Table.Mets = cellfun(@(x) x(~ismember(x, {'o2'})), Table.Mets, 'UniformOutput', false);
+%     Table.Stoichiometries = cellfun(@(met, stoich) ...
+%         stoich(~ismember(met, {'o2'})), Table.Mets, Table.Stoichiometries, 'UniformOutput', false);
+%     Table.Mets = cellfun(@(x) x(~ismember(x, {'h'})), Table.Mets, 'UniformOutput', false);
+%     Table.Stoichiometries = cellfun(@(met, stoich) ...
+%         stoich(~ismember(met, {'h'})), Table.Mets, Table.Stoichiometries, 'UniformOutput', false);
 
     Tables = {};
     
@@ -249,7 +251,6 @@ function model = balance(model, metabolite, Table)
         
         met_compartment = regexp(metabolite, '\[.*\]', 'match');
         met_compartment = met_compartment{1}{1};
-        balance = -difference./(2 * Ematrix);
         
         % Once we have found the disblanced reactions
         % Fix the stoichiometry finding a midle point between those
@@ -261,8 +262,11 @@ function model = balance(model, metabolite, Table)
             end
 
             met_candidateInd = findMetIDs(model, met_candidate);
+            [candidate_Ematrix, ~] = getElementalComposition(model.metFormulas{met_candidateInd}, model.Elements);
+            candidate_Ematrix = candidate_Ematrix(candidate_Ematrix > 0);
 
-            stoich_change = zeros(height(Table), 1) + balance(m);
+            balance = -difference(m)./(2 * candidate_Ematrix);
+            stoich_change = zeros(height(Table), 1) + balance;
             stoich_change = model.S(met_candidateInd, Table.RxnInd) + stoich_change';
 
             % Change the stoichiometry in the model
