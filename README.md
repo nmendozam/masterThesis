@@ -7,5 +7,10 @@ This repository contains the code and input models to produce the genome-scale m
 3. [Astrocyte_InflamedPalmitate_Mendoza2022.xml.gz](https://github.com/gibbslab/GSMs/blob/master/Astrocyte_InflamedPalmitate_Mendoza2022.xml.gz "Astrocyte_InflamedPalmitate_Mendoza2022.xml.gz") It is the model contextualized to an inflamed astrocyte.
 4. [Astrocyte_TreatedTibolone_Mendoza2022.xml.gz](https://github.com/gibbslab/GSMs/blob/master/Astrocyte_TreatedTibolone_Mendoza2022.xml.gz "Astrocyte_TreatedTibolone_Mendoza2022.xml.gz") It is the model contextualized to an inflamed astrocyte and then treated with tibolone.
 
+# Running this code
+To clone this repository you should run as it will make sure to download the cobratoolbox submodule.
+```bash
+git clone --recurse-submodules https://github.com/nmendozam/masterThesis.git
+```
 
 
